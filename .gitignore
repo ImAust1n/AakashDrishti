@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+backend/.venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Node / Next.js
+node_modules/
+frontend/.next/
+frontend/out/
+*.tsbuildinfo
+.env.local
+
+# Model weights & large binaries (never commit)
+model/**/*.pt
+model/**/*.pth
+model/**/*.ckpt
+model/**/*.safetensors
+model/**/checkpoints/
+*.tif
+*.tiff
+!model/ml-depth-pro-main/data/*.jpg
+
+# Reference DEM / SRTM data
+data/reference/
+data/uploads/
+data/outputs/
+
+# Env
+.env
+!.env.example
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/*
+!.vscode/extensions.json
