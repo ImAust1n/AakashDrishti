@@ -22,16 +22,19 @@ from fastapi.responses import FileResponse
 
 from app.api.deps import get_job_store
 from app.buildings.disaster import assess_aircraft_fit
-from app.buildings.height import BuildingHeight, scale_buildings_to_reference
+from app.buildings.height import BuildingHeight, scale_buildings_to_reference, scale_buildings_to_reference_multi
 from app.buildings.scenarios import (
     _sanitize_level_for_filename,
     compute_drone_water_drop,
+    compute_viewshed,
     save_flood_preview,
+    save_viewshed_preview,
     simulate_explosion_impact,
     simulate_flood_level,
 )
 from app.core.config import Settings, get_settings
 from app.core.logging import get_logger
+from app.export.report import generate_pdf_report
 from app.input.detect import GeoMetadata
 from app.jobs.models import JobStage
 from app.jobs.store import JobNotFoundError, JobStore
@@ -46,9 +49,14 @@ from app.schemas.pipeline import (
     JobListResponse,
     JobStatusResponse,
     JobSummary,
-    ReferenceScaleRequest,
+    ReferenceScaledBuildingsMultiResponse,
     ReferenceScaledBuildingsResponse,
+    ReferenceScaleMultiRequest,
+    ReferenceScaleRequest,
+    ReportResponse,
     ValidationResponse,
+    ViewshedRequest,
+    ViewshedResponse,
     WildfireDroneRequest,
     WildfireDroneResponse,
 )
@@ -339,6 +347,140 @@ def post_pipeline_buildings_scale_reference(
         reference_building_id=scaled["reference_building_id"],
         reference_height_m=scaled["reference_height_m"],
         buildings=scaled["buildings"],
+    )
+
+
+@router.post("/{job_id}/buildings/scale-reference-multi", response_model=ReferenceScaledBuildingsMultiResponse)
+def post_pipeline_buildings_scale_reference_multi(
+    job_id: str,
+    body: ReferenceScaleMultiRequest,
+    store: JobStore = Depends(get_job_store),
+) -> ReferenceScaledBuildingsMultiResponse:
+    """Multi-point GCP refinement -- see
+    app/buildings/height.py:scale_buildings_to_reference_multi. Fits scale
+    AND offset by least squares over 2+ reference heights instead of
+    anchoring on one point; falls back to the single-point pure-ratio
+    behavior with exactly 1 point. Still not DEM/GCP-verified calibration
+    -- results report `is_metric: false`, same as the single-point endpoint."""
+    data = _read_job_artifact(store, job_id, "buildings.json")
+    if not data or not data.get("buildings"):
+        return ReferenceScaledBuildingsMultiResponse(
+            job_id=job_id, status="unavailable", note="No building detections available for this job yet."
+        )
+
+    scaled = scale_buildings_to_reference_multi(
+        data["buildings"], [(p.building_id, p.reference_height_m) for p in body.points]
+    )
+    if scaled is None:
+        return ReferenceScaledBuildingsMultiResponse(
+            job_id=job_id,
+            status="unavailable",
+            note="None of the given reference points matched a building with a usable relative height.",
+        )
+
+    return ReferenceScaledBuildingsMultiResponse(
+        job_id=job_id,
+        status="scaled",
+        note=(
+            f"Heights are least-squares rescaled from {len(scaled['reference_points'])} user-supplied "
+            f"reference point(s) (residual RMSE {scaled['residual_rmse_m']:.2f}), not verified against a "
+            "DEM/GCP survey -- treat as an approximate, demo-oriented estimate."
+        ),
+        scale_factor=scaled["scale_factor"],
+        offset_m=scaled["offset_m"],
+        residual_rmse_m=scaled["residual_rmse_m"],
+        reference_points=scaled["reference_points"],
+        buildings=scaled["buildings"],
+    )
+
+
+@router.post("/{job_id}/viewshed", response_model=ViewshedResponse)
+def post_pipeline_viewshed(
+    job_id: str,
+    body: ViewshedRequest,
+    store: JobStore = Depends(get_job_store),
+) -> ViewshedResponse:
+    """Radial line-of-sight viewshed from an observer point -- see
+    app/buildings/scenarios.py:compute_viewshed. Writes a visible-area
+    preview PNG into the job's output directory, same pattern as the flood
+    simulation endpoint."""
+    try:
+        store.get(job_id)
+    except JobNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+    dsm_height, geo, dsm_is_metric, error = _load_job_dsm(store, job_id)
+    if error is not None:
+        return ViewshedResponse(job_id=job_id, status="unavailable", note=error)
+
+    result = compute_viewshed(
+        dsm_height, body.observer_px, body.observer_height_agl, geo=geo, dsm_is_metric=dsm_is_metric,
+        max_radius_px=body.max_radius_px,
+    )
+
+    visible_mask = result.pop("_visible_mask", None)
+    observer_rc = result.pop("_observer_rc", None)
+    preview_url = None
+    if result["status"] == "computed" and visible_mask is not None:
+        job_dir = store.job_dir(job_id)
+        filename = f"viewshed_{int(round(body.observer_px[0]))}_{int(round(body.observer_px[1]))}.png"
+        save_viewshed_preview(dsm_height, visible_mask, observer_rc, job_dir / filename)
+        job = store.get(job_id)
+        job.outputs[f"viewshed_{int(round(body.observer_px[0]))}_{int(round(body.observer_px[1]))}_png"] = (
+            f"/api/pipeline/output/{job_id}/{filename}"
+        )
+        store.update(job)
+        preview_url = f"/api/pipeline/output/{job_id}/{filename}"
+
+    return ViewshedResponse(job_id=job_id, preview_url=preview_url, **result)
+
+
+@router.post("/{job_id}/report", response_model=ReportResponse)
+def post_pipeline_report(
+    job_id: str,
+    store: JobStore = Depends(get_job_store),
+) -> ReportResponse:
+    """Generates a PDF situation report from this job's already-persisted
+    artifacts (metadata.json, buildings.json, disaster_zones.json,
+    validation.json) -- see app/export/report.py. Nothing is computed
+    fresh; the report can only restate what the rest of the app already
+    reports. Overwrites report.pdf on repeat calls."""
+    try:
+        store.get(job_id)
+    except JobNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+    job_dir = store.job_dir(job_id)
+    metadata = _read_job_artifact(store, job_id, "metadata.json")
+    if metadata is None:
+        return ReportResponse(job_id=job_id, status="unavailable", note="This job has not finished the pipeline yet (no metadata.json).")
+
+    buildings = (_read_job_artifact(store, job_id, "buildings.json") or {}).get("buildings", [])
+    zones = (_read_job_artifact(store, job_id, "disaster_zones.json") or {}).get("zones", [])
+    validation = (_read_job_artifact(store, job_id, "validation.json") or {}).get(
+        "result", {"status": "unavailable", "note": "No validation.json for this job."}
+    )
+
+    out_path = job_dir / "report.pdf"
+    generate_pdf_report(
+        job_id=job_id,
+        job_dir=job_dir,
+        metadata=metadata,
+        buildings=buildings,
+        zones=zones,
+        validation=validation,
+        out_path=out_path,
+        dsm_preview_path=job_dir / "dsm_preview.png",
+        fused_depth_preview_path=job_dir / "fused_depth_preview.png",
+    )
+
+    job = store.get(job_id)
+    job.outputs["report_pdf"] = f"/api/pipeline/output/{job_id}/report.pdf"
+    store.update(job)
+
+    return ReportResponse(
+        job_id=job_id, status="generated", note="PDF situation report generated.",
+        report_url=f"/api/pipeline/output/{job_id}/report.pdf",
     )
 
 

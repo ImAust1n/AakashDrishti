@@ -72,6 +72,53 @@ class ReferenceScaledBuildingsResponse(BaseModel):
     buildings: list[Building] = []
 
 
+class ReferencePoint(BaseModel):
+    building_id: int
+    reference_height_m: float
+
+
+class ReferenceScaleMultiRequest(BaseModel):
+    """3+ user-supplied real-world heights (PRD.md "GCP refinement"), fit by
+    least squares instead of anchoring on a single point. Works with as
+    few as 1 point (falls back to the single-point pure-ratio behavior)."""
+
+    points: list[ReferencePoint]
+
+
+class ReferenceScaledBuildingsMultiResponse(BaseModel):
+    job_id: str
+    status: str  # "scaled" | "unavailable"
+    note: str
+    scale_factor: Optional[float] = None
+    offset_m: Optional[float] = None
+    residual_rmse_m: Optional[float] = None
+    reference_points: list[ReferencePoint] = []
+    buildings: list[Building] = []
+
+
+class ViewshedRequest(BaseModel):
+    observer_px: tuple[float, float]
+    observer_height_agl: float = 10.0
+    max_radius_px: Optional[int] = None
+
+
+class ViewshedResponse(BaseModel):
+    job_id: str
+    status: str  # "computed" | "unavailable"
+    note: str
+    visible_fraction: Optional[float] = None
+    visible_area_m2: Optional[float] = None
+    observer_elevation: Optional[float] = None
+    preview_url: Optional[str] = None
+
+
+class ReportResponse(BaseModel):
+    job_id: str
+    status: str  # "generated" | "unavailable"
+    note: str
+    report_url: Optional[str] = None
+
+
 class DisasterZone(BaseModel):
     """One GeoJSON-style Feature from app/buildings/disaster.py.
 

@@ -119,3 +119,74 @@ def scale_buildings_to_reference(
         "reference_height_m": reference_height_m,
         "buildings": scaled,
     }
+
+
+def scale_buildings_to_reference_multi(
+    buildings: list[dict],
+    points: list[tuple[int, float]],
+) -> Optional[dict]:
+    """Same idea as `scale_buildings_to_reference` but for 3+ user-supplied
+    reference heights (PRD.md "minimal Ground Control Points... GCP
+    refinement"): fits scale AND offset `height_m * s + t` by ordinary least
+    squares over the given (building_id, reference_height_m) pairs, instead
+    of anchoring on exactly one point. With fewer than 2 usable points this
+    falls back to the same pure-ratio (t=0) behavior as the single-point
+    function, since scale+offset is underdetermined from one sample.
+
+    Still explicitly NOT the same as DEM/GCP-verified metric calibration --
+    see the single-point function's docstring; callers must label results
+    "reference-scaled", not "calibrated".
+
+    Returns None if no supplied point resolves to a usable (finite,
+    positive) building height -- never fabricates a fit.
+    """
+    by_id = {b["id"]: b for b in buildings}
+    pairs: list[tuple[float, float]] = []
+    used_points: list[dict] = []
+    for building_id, reference_height_m in points:
+        b = by_id.get(building_id)
+        if b is None or reference_height_m <= 0:
+            continue
+        value = b.get("height_m")
+        if value is None or not np.isfinite(value) or value <= 0:
+            continue
+        pairs.append((float(value), float(reference_height_m)))
+        used_points.append({"building_id": building_id, "reference_height_m": reference_height_m})
+
+    if not pairs:
+        return None
+
+    x = np.array([p[0] for p in pairs], dtype=np.float64)
+    y = np.array([p[1] for p in pairs], dtype=np.float64)
+
+    if len(pairs) < 2:
+        scale, offset = float(y[0] / x[0]), 0.0
+    else:
+        design = np.vstack([x, np.ones_like(x)]).T
+        (scale, offset), *_ = np.linalg.lstsq(design, y, rcond=None)
+        scale, offset = float(scale), float(offset)
+        if not np.isfinite(scale) or scale <= 0:
+            # Degenerate affine fit (e.g. near-constant heights): fall back to a
+            # forced-through-origin least-squares scale, still real least squares.
+            scale, offset = float(np.sum(x * y) / np.sum(x * x)), 0.0
+
+    residuals = scale * x + offset - y
+    residual_rmse_m = float(np.sqrt(np.mean(residuals**2)))
+
+    scaled = []
+    for b in buildings:
+        value = b.get("height_m")
+        scaled.append(
+            {
+                **b,
+                "height_m": (value * scale + offset) if value is not None and np.isfinite(value) else None,
+                "is_metric": False,  # unverified reference points, same as the single-point function
+            }
+        )
+    return {
+        "scale_factor": scale,
+        "offset_m": offset,
+        "residual_rmse_m": residual_rmse_m,
+        "reference_points": used_points,
+        "buildings": scaled,
+    }

@@ -254,6 +254,131 @@ def simulate_explosion_impact(
     }
 
 
+def save_viewshed_preview(dsm_height: np.ndarray, visible_mask: np.ndarray, observer_rc: tuple[int, int], out_path) -> None:
+    """Green-overlay visible-area preview PNG, same convention as `save_flood_preview`."""
+    finite = dsm_height[np.isfinite(dsm_height)]
+    if finite.size == 0:
+        base = np.zeros((*dsm_height.shape, 3), dtype=np.uint8)
+    else:
+        lo, hi = float(finite.min()), float(finite.max())
+        normalized = np.zeros_like(dsm_height, dtype=np.float64) if hi <= lo else np.clip((dsm_height - lo) / (hi - lo), 0, 1)
+        cmap = matplotlib.colormaps.get_cmap("terrain")
+        base = (cmap(np.nan_to_num(normalized))[:, :, :3] * 255).astype(np.uint8)
+
+    overlay = base.astype(np.float32).copy()
+    green = np.array([60.0, 220.0, 90.0], dtype=np.float32)
+    alpha = 0.45
+    overlay[visible_mask] = (1 - alpha) * base[visible_mask].astype(np.float32) + alpha * green
+
+    row, col = observer_rc
+    h, w = dsm_height.shape
+    r0, r1 = max(0, row - 4), min(h, row + 5)
+    c0, c1 = max(0, col - 4), min(w, col + 5)
+    overlay[r0:r1, c0:c1] = np.array([230.0, 30.0, 30.0], dtype=np.float32)
+
+    Image.fromarray(overlay.astype(np.uint8)).save(out_path)
+
+
+def compute_viewshed(
+    dsm_height: np.ndarray,
+    observer_px: tuple[float, float],
+    observer_height_agl: float,
+    geo: Optional[GeoMetadata] = None,
+    dsm_is_metric: bool = False,
+    max_radius_px: Optional[int] = None,
+    n_rays: int = 360,
+) -> dict:
+    """Radial line-of-sight viewshed: which DSM pixels are visible from an
+    observer standing at `observer_px` with their eye `observer_height_agl`
+    above the DSM surface at that point.
+
+    Method: for each of `n_rays` evenly-spaced directions around the
+    observer, march outward pixel by pixel (Bresenham-style unit steps)
+    tracking the steepest elevation angle seen so far along that ray; a
+    pixel is visible only if the elevation angle to it is greater than or
+    equal to every angle blocking it closer in. This is the standard
+    radial-sweep viewshed algorithm (real, not approximated by distance
+    alone) -- but it is still an idealized line-of-sight over the DSM
+    surface only: no atmospheric refraction, no sub-pixel obstacles (thin
+    poles/wires below the DSM's own resolution), and Earth curvature is
+    ignored (fine at the sub-kilometer ranges this tool targets, not
+    at long range).
+
+    `observer_height_agl` is in the DSM's own units (meters if
+    `dsm_is_metric`, else relative DSM units), matching the same
+    `dsm_is_metric`-gated-units convention as `simulate_flood_level`.
+    """
+    del dsm_is_metric  # unit label only, kept for signature symmetry with the other scenario tools
+    h, w = dsm_height.shape
+    col = int(round(observer_px[0]))
+    row = int(round(observer_px[1]))
+    if not (0 <= row < h and 0 <= col < w):
+        return {
+            "status": "unavailable",
+            "note": f"observer_px {list(observer_px)} is outside the DSM bounds ({w}x{h}).",
+            "visible_fraction": None,
+            "visible_area_m2": None,
+            "observer_elevation": None,
+        }
+
+    observer_elev = dsm_height[row, col]
+    if not np.isfinite(observer_elev):
+        return {
+            "status": "unavailable",
+            "note": "DSM has no valid (finite) elevation at the given observer_px (NoData pixel).",
+            "visible_fraction": None,
+            "visible_area_m2": None,
+            "observer_elevation": None,
+        }
+    observer_elev = float(observer_elev) + observer_height_agl
+
+    radius = max_radius_px if max_radius_px is not None else min(h, w) // 2
+    radius = max(2, min(radius, int(math.hypot(h, w))))
+
+    visible = np.zeros((h, w), dtype=bool)
+    visible[row, col] = True
+    finite = np.isfinite(dsm_height)
+
+    for k in range(n_rays):
+        theta = 2.0 * math.pi * k / n_rays
+        dx_dir, dy_dir = math.cos(theta), math.sin(theta)
+        max_angle = -math.inf
+        for step in range(1, radius + 1):
+            x = col + dx_dir * step
+            y = row + dy_dir * step
+            xi, yi = int(round(x)), int(round(y))
+            if not (0 <= yi < h and 0 <= xi < w):
+                break
+            if not finite[yi, xi]:
+                continue
+            angle = (float(dsm_height[yi, xi]) - observer_elev) / step
+            if angle >= max_angle:
+                visible[yi, xi] = True
+                max_angle = angle
+
+    total_finite = int(finite.sum())
+    visible_count = int((visible & finite).sum())
+    visible_fraction = (visible_count / total_finite) if total_finite > 0 else 0.0
+
+    dx, dz, spacing_units = _pixel_spacing(geo)
+    visible_area_m2 = visible_count * dx * dz if spacing_units == "meters" else None
+
+    return {
+        "status": "computed",
+        "note": (
+            "Radial line-of-sight viewshed over the DSM surface (real algorithm: per-ray steepest-"
+            "angle-so-far sweep, not a distance-only approximation). Idealized: no atmospheric "
+            "refraction, no sub-DSM-resolution obstacles, Earth curvature ignored -- treat as decision "
+            "support for siting an observer/comms relay, not a certified RF/optical coverage study."
+        ),
+        "visible_fraction": visible_fraction,
+        "visible_area_m2": visible_area_m2,
+        "observer_elevation": observer_elev,
+        "_visible_mask": visible,
+        "_observer_rc": (row, col),
+    }
+
+
 def compute_drone_water_drop(
     dsm_height: np.ndarray,
     fire_point_px: tuple[float, float],

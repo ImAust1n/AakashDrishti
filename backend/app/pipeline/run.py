@@ -32,6 +32,7 @@ from app.buildings.disaster import (
 from app.buildings.height import compute_building_heights
 from app.buildings.segment import segment_buildings
 from app.buildings.shadow import estimate_shadow_heights, get_sun_elevation_from_metadata
+from app.calibration.shadow_calibration import ShadowCrossCheckResult, apply_shadow_cross_check
 from app.calibration.srtm import calibrate_with_srtm
 from app.core.config import Settings
 from app.core.logging import get_logger
@@ -163,6 +164,15 @@ def execute_pipeline(job_id: str, store: JobStore, settings: Settings) -> None:
         # Wrapped so a failure degrades to an empty building list, never fails the whole job.
         building_heights: list = []
         building_mask = np.zeros(dsm_height.shape, dtype=bool)
+        shadow_cross_check = ShadowCrossCheckResult(
+            status="insufficient_data",
+            note="Building analysis did not run or failed before the shadow cross-check stage.",
+            dsm_height=dsm_height,
+            dsm_is_metric=dsm_is_metric,
+            scale_factor=None,
+            median_ratio=None,
+            n_buildings_used=0,
+        )
         try:
             segmentation = segment_buildings(rgb_image, dsm_height, fusion_result.confidence)
             building_mask = segmentation.mask
@@ -186,6 +196,23 @@ def execute_pipeline(job_id: str, store: JobStore, settings: Settings) -> None:
             )
             shadow_by_id = {s.building_id: s for s in shadow_estimates}
 
+            # --- Shadow-geometry cross-check: rescale the height field when the shadow-derived
+            # heights and the depth-model heights disagree beyond a threshold (see
+            # app/calibration/shadow_calibration.py). Never overrides an already DEM/SRTM-verified
+            # DSM. `dsm_height`/`dsm_is_metric` are reassigned here so every stage below (buildings
+            # payload, disaster zones, validation, mesh, Unity export, metadata) sees the correction.
+            shadow_cross_check = apply_shadow_cross_check(dsm_height, dsm_is_metric, building_heights, shadow_estimates)
+            dsm_height = shadow_cross_check.dsm_height
+            dsm_is_metric = shadow_cross_check.dsm_is_metric
+            if shadow_cross_check.status == "applied":
+                for bh in building_heights:
+                    if bh.height_value is not None:
+                        bh.height_value *= shadow_cross_check.scale_factor
+                        bh.is_metric = True
+                dsm_path_write = job_dir / "dsm.tif"
+                write_height_geotiff(dsm_height, dsm_path_write, descriptor.geo)
+                save_depth_preview(dsm_height, job_dir / "dsm_preview.png", cmap_name="terrain")
+
             buildings_payload = {
                 "job_id": job_id,
                 "count": len(building_heights),
@@ -199,7 +226,11 @@ def execute_pipeline(job_id: str, store: JobStore, settings: Settings) -> None:
                         "confidence": bh.mean_confidence,
                         "shadow_estimate_m": (shadow_by_id[bh.id].shadow_estimate_m if bh.id in shadow_by_id else None),
                         "depth_vs_shadow_delta_m": (
-                            shadow_by_id[bh.id].depth_vs_shadow_delta_m if bh.id in shadow_by_id else None
+                            (bh.height_value - shadow_by_id[bh.id].shadow_estimate_m)
+                            if bh.id in shadow_by_id
+                            and shadow_by_id[bh.id].shadow_estimate_m is not None
+                            and bh.height_value is not None
+                            else None
                         ),
                     }
                     for bh in building_heights
@@ -355,6 +386,11 @@ def execute_pipeline(job_id: str, store: JobStore, settings: Settings) -> None:
             "height_scale_applied": settings.da_v2_height_scale,
             "unity_horizontal_scale_source": unity_scene["horizontal_scale_source"],
             "unity_world_size_m": unity_scene["world_size_m"],
+            "shadow_calibration_status": shadow_cross_check.status,
+            "shadow_calibration_note": shadow_cross_check.note,
+            "shadow_calibration_scale_factor": shadow_cross_check.scale_factor,
+            "shadow_calibration_median_ratio": shadow_cross_check.median_ratio,
+            "shadow_calibration_n_buildings": shadow_cross_check.n_buildings_used,
             "confidence_available": True,
             "calibration_status": calibration.status if calibration else "not_applicable",
             "calibration_note": (

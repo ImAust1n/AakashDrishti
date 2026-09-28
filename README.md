@@ -246,6 +246,27 @@ AakashDrishti/
 - Each job also writes a Unity bundle (`unity_scene.json`, `heightmap.r16`, `texture.jpg`) next to the other outputs,
   served at `/api/pipeline/output/{job_id}/{filename}`. Schema: `backend/app/export/unity.py`.
 
+## Additional Analysis Tools
+
+- **Shadow-geometry cross-check** (`app/calibration/shadow_calibration.py`): for georeferenced input with a sun
+  elevation angle in its metadata, compares each building's shadow-derived height (`app/buildings/shadow.py`, real
+  trigonometry) against its depth-model height. If the median ratio across 3+ buildings deviates >20%, the height
+  field is rescaled 50/50 toward the shadow-implied scale and `dsm_is_metric` flips to `true`. Never overrides an
+  already DEM/SRTM-verified DSM. Status/numbers are in `metadata.json` under `shadow_calibration_*`.
+- **Multi-point GCP refinement** — `POST /api/pipeline/{job_id}/buildings/scale-reference-multi` fits scale+offset
+  by least squares over 2+ user-supplied reference heights (vs. the single-point `scale-reference` endpoint's pure
+  ratio). Still reports `is_metric: false` — it's an unverified reference, not a survey.
+- **Viewshed** — `POST /api/pipeline/{job_id}/viewshed` (`observer_px`, `observer_height_agl`) computes a real
+  radial line-of-sight sweep over the DSM and writes a visible-area preview PNG. `app/buildings/scenarios.py::compute_viewshed`.
+- **PDF situation report** — `POST /api/pipeline/{job_id}/report` renders `report.pdf` (title/stats, DSM preview,
+  tallest buildings, disaster-zone summary) purely from the job's own already-persisted artifacts. `app/export/report.py`.
+- **Landscape-stratified benchmark** — `model/training/bench.py` compares the stock vs. GAMUS fine-tuned checkpoint
+  across urban/sparse/forested/mixed GAMUS test tiles (classified from GAMUS's own land-cover masks). Run it with
+  `backend/.venv/Scripts/python.exe model/training/bench.py --n-per-subset 15`; results land in
+  `model/training/benchmarks/results.md`. No "hilly" subset — GAMUS's AGL height maps normalize away broad terrain
+  relief by construction, so it isn't recoverable without a separate bare-earth DEM (see the script's docstring).
+  Latest run (59 tiles): mean MAE 3.93 m zero-shot → 2.71 m fine-tuned (production formula), r 0.35 → 0.75.
+
 ## Notes
 
 - Models are loaded and unloaded **sequentially** to stay within 8 GB VRAM
