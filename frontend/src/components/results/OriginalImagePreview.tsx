@@ -13,7 +13,7 @@ export function OriginalImagePreview({ src }: OriginalImagePreviewProps) {
 
   if (failed) {
     return (
-      <p className="max-w-xs text-center text-sm text-slate-500">
+      <p className="max-w-xs text-center text-sm text-muted-foreground">
         Browser preview isn&apos;t available for this file format (e.g. TIFF/GeoTIFF), but it was uploaded and
         processed as-is.
       </p>

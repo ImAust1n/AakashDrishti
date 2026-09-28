@@ -29,8 +29,12 @@ class Settings(BaseSettings):
     )
 
     # Depth Anything V2
+    # Default points at the GAMUS-fine-tuned checkpoint (measured RMSE 3.94m -> 2.40m improvement over the
+    # stock pretrained weights on held-out remote-sensing AGL-height data -- see
+    # model/training/runs/da_v2_gamus_full/train_log.jsonl and context/research-notes.md). This .env value
+    # is normally set explicitly (see .env.example); this default only applies if unset.
     depth_anything_v2_encoder: str = "vitb"
-    depth_anything_v2_checkpoint: str = "./model/depth_anything_v2_vitb.pth"
+    depth_anything_v2_checkpoint: str = "./model/depth_anything_v2_vitb_gamus_best.pth"
 
     # Depth Pro
     depth_pro_checkpoint: str = "./model/ml-depth-pro-main/checkpoints/depth_pro.pt"

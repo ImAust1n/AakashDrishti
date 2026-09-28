@@ -68,6 +68,30 @@ def _find_overlapping_dem(srtm_dir: Path, geo: GeoMetadata) -> Optional[Path]:
     return None
 
 
+def reproject_dem_to_grid(dem_path: Path, geo: GeoMetadata, shape: tuple[int, int]) -> np.ndarray:
+    """Reproject a DEM/reference raster onto the target grid (`geo`'s CRS/
+    transform, `shape` rows x cols). Shared by `calibrate_with_srtm` and
+    `app/validation/metrics.py` so both use the exact same resampling
+    behaviour when comparing against a reference DEM. Raises on any
+    GDAL/reprojection failure -- callers are expected to catch and report
+    "unavailable" rather than silently continuing with an unreprojected DEM.
+    """
+    with rasterio.open(dem_path) as dem:
+        reference = np.full(shape, np.nan, dtype=np.float32)
+        reproject(
+            source=rasterio.band(dem, 1),
+            destination=reference,
+            src_transform=dem.transform,
+            src_crs=dem.crs,
+            src_nodata=dem.nodata,
+            dst_transform=rasterio.Affine(*geo.transform),
+            dst_crs=geo.crs,
+            dst_nodata=np.nan,
+            resampling=Resampling.bilinear,
+        )
+    return reference
+
+
 def calibrate_with_srtm(
     relative_height: np.ndarray,
     geo: GeoMetadata,
@@ -84,19 +108,7 @@ def calibrate_with_srtm(
         )
 
     try:
-        with rasterio.open(dem_path) as dem:
-            reference = np.full(relative_height.shape, np.nan, dtype=np.float32)
-            reproject(
-                source=rasterio.band(dem, 1),
-                destination=reference,
-                src_transform=dem.transform,
-                src_crs=dem.crs,
-                src_nodata=dem.nodata,
-                dst_transform=rasterio.Affine(*geo.transform),
-                dst_crs=geo.crs,
-                dst_nodata=np.nan,
-                resampling=Resampling.bilinear,
-            )
+        reference = reproject_dem_to_grid(dem_path, geo, relative_height.shape)
     except Exception as exc:  # noqa: BLE001 -- any GDAL/reprojection failure is a real, reportable calibration failure
         logger.exception("SRTM reprojection failed for %s", dem_path)
         return CalibrationResult(

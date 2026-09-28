@@ -43,13 +43,13 @@ export function UploadDropzone({ onFileSelected, validationError }: UploadDropzo
         }}
         onDragLeave={() => setIsDragging(false)}
         onDrop={onDrop}
-        className={`flex cursor-pointer flex-col items-center justify-center gap-4 rounded-2xl border-2 border-dashed px-8 py-16 text-center transition-colors ${
+        className={`glass-panel flex cursor-pointer flex-col items-center justify-center gap-4 rounded-2xl border-2 border-dashed px-8 py-16 text-center transition-colors ${
           isDragging
-            ? "border-cyan-400 bg-cyan-50"
-            : "border-slate-300 bg-white hover:border-slate-400 hover:bg-slate-50"
+            ? "border-primary/70 bg-primary/5"
+            : "border-border hover:border-primary/40 hover:bg-muted/30"
         }`}
       >
-        <div className="flex h-14 w-14 items-center justify-center rounded-full bg-cyan-50 text-cyan-600">
+        <div className="flex h-14 w-14 items-center justify-center rounded-full border border-primary/30 bg-primary/10 text-primary">
           <svg viewBox="0 0 24 24" fill="none" className="h-7 w-7" stroke="currentColor" strokeWidth={1.75}>
             <path
               d="M12 16V4m0 0L7 9m5-5l5 5M4 16v3a1 1 0 001 1h14a1 1 0 001-1v-3"
@@ -59,13 +59,13 @@ export function UploadDropzone({ onFileSelected, validationError }: UploadDropzo
           </svg>
         </div>
         <div>
-          <p className="text-lg font-medium text-slate-900">Upload Remote-Sensing Image</p>
-          <p className="mt-1 text-sm text-slate-500">Drag &amp; drop your image here, or</p>
+          <p className="text-lg font-medium text-foreground">Upload Remote-Sensing Image</p>
+          <p className="mt-1 text-sm text-muted-foreground">Drag &amp; drop your image here, or</p>
         </div>
-        <span className="rounded-lg bg-cyan-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-cyan-500">
+        <span className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90">
           Browse Files
         </span>
-        <p className="text-xs uppercase tracking-wider text-slate-500">PNG &bull; JPG &bull; TIFF &bull; GeoTIFF</p>
+        <p className="text-xs uppercase tracking-wider text-muted-foreground">PNG &bull; JPG &bull; TIFF &bull; GeoTIFF</p>
         <input
           ref={inputRef}
           type="file"
@@ -75,7 +75,7 @@ export function UploadDropzone({ onFileSelected, validationError }: UploadDropzo
         />
       </div>
       {validationError && (
-        <p className="mt-3 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
+        <p className="mt-3 rounded-lg border border-red-400/30 bg-red-400/10 px-4 py-2 text-sm text-red-200">
           {validationError}
         </p>
       )}

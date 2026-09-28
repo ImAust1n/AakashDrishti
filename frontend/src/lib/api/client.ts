@@ -1,4 +1,4 @@
-/** Thin fetch wrapper for the DepthWizard backend. No UI concerns here. */
+/** Thin fetch wrapper for the AakashDrishti backend. No UI concerns here. */
 
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
@@ -35,7 +35,7 @@ export async function apiFetch<T>(
     response = await fetch(`${API_BASE_URL}${path}`, init);
   } catch {
     throw new ApiError(
-      `Could not reach the DepthWizard backend at ${API_BASE_URL}${path}. Is it running?`,
+      `Could not reach the AakashDrishti backend at ${API_BASE_URL}${path}. Is it running?`,
       0,
       true,
     );

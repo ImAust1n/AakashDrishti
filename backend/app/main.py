@@ -21,7 +21,7 @@ configure_logging()
 
 settings = get_settings()
 
-app = FastAPI(title="DepthWizard API", version="0.1.0")
+app = FastAPI(title="AakashDrishti API", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,

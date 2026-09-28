@@ -12,16 +12,16 @@ export function ProcessingStages({ processingStatus, isUploading }: ProcessingSt
   const progress = isUploading ? 0 : (processingStatus?.progress ?? 0);
 
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white px-6 py-8">
+    <div className="glass-panel rounded-2xl px-6 py-8">
       <div className="mb-2 flex items-center justify-between">
-        <p className="text-sm font-medium text-slate-700">
+        <p className="text-sm font-medium text-foreground">
           {isUploading ? "Uploading image to backend..." : "Processing pipeline"}
         </p>
-        <span className="text-xs font-medium text-slate-500">{progress}%</span>
+        <span className="text-xs font-medium text-primary">{progress}%</span>
       </div>
-      <div className="mb-6 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+      <div className="mb-6 h-1.5 w-full overflow-hidden rounded-full bg-muted/50">
         <div
-          className="h-full rounded-full bg-cyan-600 transition-all duration-500"
+          className="h-full rounded-full bg-gradient-to-r from-primary to-primary/60 transition-all duration-500"
           style={{ width: `${progress}%` }}
         />
       </div>
@@ -34,26 +34,26 @@ export function ProcessingStages({ processingStatus, isUploading }: ProcessingSt
               <span
                 className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold ${
                   isDone
-                    ? "bg-cyan-600 text-white"
+                    ? "bg-primary text-primary-foreground"
                     : isActive
-                      ? "border-2 border-cyan-500 text-cyan-600"
-                      : "border border-slate-300 text-slate-400"
+                      ? "border-2 border-primary text-primary"
+                      : "border border-border text-muted-foreground"
                 }`}
               >
                 {isDone ? "✓" : index + 1}
               </span>
               <span
                 className={`text-sm ${
-                  isDone ? "text-slate-400 line-through decoration-slate-300" : isActive ? "font-medium text-slate-900" : "text-slate-500"
+                  isDone ? "text-muted-foreground line-through decoration-muted-foreground" : isActive ? "font-medium text-foreground" : "text-muted-foreground"
                 }`}
               >
                 {STAGE_LABEL[stage]}
               </span>
               {isActive && (
                 <span className="ml-auto flex gap-1">
-                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-cyan-500 [animation-delay:-0.3s]" />
-                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-cyan-500 [animation-delay:-0.15s]" />
-                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-cyan-500" />
+                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-primary [animation-delay:-0.3s]" />
+                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-primary [animation-delay:-0.15s]" />
+                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-primary" />
                 </span>
               )}
             </li>

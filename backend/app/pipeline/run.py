@@ -22,6 +22,16 @@ import json
 import time
 from pathlib import Path
 
+import numpy as np
+
+from app.buildings.disaster import (
+    find_emergency_landing_zones,
+    find_flood_risk_zones,
+    find_highrise_fire_access_risk,
+)
+from app.buildings.height import compute_building_heights
+from app.buildings.segment import segment_buildings
+from app.buildings.shadow import estimate_shadow_heights, get_sun_elevation_from_metadata
 from app.calibration.srtm import calibrate_with_srtm
 from app.core.config import Settings
 from app.core.logging import get_logger
@@ -34,6 +44,7 @@ from app.input.detect import UnsupportedInputError, detect_input, read_rgb_array
 from app.jobs.models import JobStage, JobState
 from app.jobs.store import JobStore
 from app.mesh.generate import generate_terrain_mesh
+from app.validation.metrics import compute_validation_metrics
 
 logger = get_logger(__name__)
 
@@ -43,8 +54,6 @@ def _output_url(job_id: str, filename: str) -> str:
 
 
 def _depth_stats(arr) -> dict:
-    import numpy as np
-
     finite = arr[np.isfinite(arr)]
     if finite.size == 0:
         return {"min": 0.0, "max": 0.0, "mean": 0.0}
@@ -138,10 +147,150 @@ def execute_pipeline(job_id: str, store: JobStore, settings: Settings) -> None:
         )
         store.update(job)
 
+        # Read the RGB array once here (used by both building segmentation below and the
+        # mesh texture further down) so both stages see the exact same source pixels.
+        rgb_image = read_rgb_array(source_path)
+
+        # --- BUILDINGS: heuristic classical-CV footprint extraction + p90 height + shadow cross-check ---
+        # No new neural network is loaded here (CLAUDE.md Section 5 VRAM budget) -- see
+        # app/buildings/segment.py for why this is deliberately classical CV, not a trained model.
+        # Wrapped so a failure degrades to an empty building list, never fails the whole job.
+        building_heights: list = []
+        building_mask = np.zeros(dsm_height.shape, dtype=bool)
+        try:
+            segmentation = segment_buildings(rgb_image, dsm_height, fusion_result.confidence)
+            building_mask = segmentation.mask
+            building_heights = compute_building_heights(
+                segmentation.footprints,
+                segmentation.labels,
+                dsm_height,
+                fusion_result.confidence,
+                dsm_is_metric,
+            )
+
+            pixel_size_m = float(np.mean(descriptor.geo.resolution)) if descriptor.geo is not None else None
+            sun_elevation_deg = get_sun_elevation_from_metadata(source_path)
+            shadow_estimates = estimate_shadow_heights(
+                rgb_image,
+                segmentation.footprints,
+                segmentation.labels,
+                sun_elevation_deg=sun_elevation_deg,
+                pixel_size_m=pixel_size_m,
+                building_heights=building_heights,
+            )
+            shadow_by_id = {s.building_id: s for s in shadow_estimates}
+
+            buildings_payload = {
+                "job_id": job_id,
+                "count": len(building_heights),
+                "buildings": [
+                    {
+                        "id": bh.id,
+                        "footprint": [list(pt) for pt in bh.footprint],
+                        "area_px": bh.area_px,
+                        "height_m": bh.height_value,
+                        "is_metric": bh.is_metric,
+                        "confidence": bh.mean_confidence,
+                        "shadow_estimate_m": (shadow_by_id[bh.id].shadow_estimate_m if bh.id in shadow_by_id else None),
+                        "depth_vs_shadow_delta_m": (
+                            shadow_by_id[bh.id].depth_vs_shadow_delta_m if bh.id in shadow_by_id else None
+                        ),
+                    }
+                    for bh in building_heights
+                ],
+                "note": segmentation.method_note,
+            }
+        except Exception as exc:  # noqa: BLE001 -- building analysis is best-effort, must never fail the job
+            logger.exception("Building segmentation/height/shadow analysis failed for job %s", job_id)
+            building_heights = []
+            building_mask = np.zeros(dsm_height.shape, dtype=bool)
+            buildings_payload = {
+                "job_id": job_id,
+                "count": 0,
+                "buildings": [],
+                "note": f"Building analysis failed and was skipped: {exc}",
+            }
+
+        buildings_path = job_dir / "buildings.json"
+        buildings_path.write_text(json.dumps(buildings_payload, indent=2), encoding="utf-8")
+        job.outputs["buildings_json"] = _output_url(job_id, buildings_path.name)
+        store.update(job)
+
+        # --- DISASTER-MANAGEMENT DECISION SUPPORT (heuristic, see app/buildings/disaster.py) ---
+        try:
+            zone_features = []
+            zone_features += find_emergency_landing_zones(dsm_height, building_mask, geo=descriptor.geo)
+            zone_features += find_flood_risk_zones(dsm_height, geo=descriptor.geo, dsm_is_metric=dsm_is_metric)
+            zone_features += find_highrise_fire_access_risk(building_heights, geo=descriptor.geo)
+
+            zones_out = [
+                {
+                    "type": feat["properties"]["zone_type"],
+                    "geometry": feat["geometry"],
+                    "risk_level": feat["properties"].get("risk_level"),
+                    "notes": feat["properties"].get("note"),
+                    "properties": feat["properties"],
+                }
+                for feat in zone_features
+            ]
+            zones_payload = {
+                "job_id": job_id,
+                "count": len(zones_out),
+                "zones": zones_out,
+                "note": "All zones are heuristic decision support, not certified surveys -- see app/buildings/disaster.py.",
+            }
+        except Exception as exc:  # noqa: BLE001 -- disaster-zone analysis is best-effort, must never fail the job
+            logger.exception("Disaster-zone analysis failed for job %s", job_id)
+            zones_payload = {
+                "job_id": job_id,
+                "count": 0,
+                "zones": [],
+                "note": f"Disaster-zone analysis failed and was skipped: {exc}",
+            }
+
+        zones_path = job_dir / "disaster_zones.json"
+        zones_path.write_text(json.dumps(zones_payload, indent=2), encoding="utf-8")
+        job.outputs["disaster_zones_json"] = _output_url(job_id, zones_path.name)
+        store.update(job)
+
+        # --- VALIDATION (FR-11): RMSE/MAE/correlation vs. reference DEM, if any ---
+        try:
+            validation = compute_validation_metrics(dsm_height, descriptor.geo, settings.srtm_dir_path, dsm_is_metric)
+            validation_payload = {
+                "job_id": job_id,
+                "result": {
+                    "status": validation.status,
+                    "note": validation.note,
+                    "rmse": validation.rmse,
+                    "mae": validation.mae,
+                    "correlation": validation.correlation,
+                    "valid_pixel_count": validation.valid_pixel_count,
+                    "reference_source": validation.reference_source,
+                },
+            }
+        except Exception as exc:  # noqa: BLE001 -- validation is best-effort, must never fail the job
+            logger.exception("Validation metrics computation failed for job %s", job_id)
+            validation_payload = {
+                "job_id": job_id,
+                "result": {
+                    "status": "unavailable",
+                    "note": f"Validation failed and was skipped: {exc}",
+                    "rmse": None,
+                    "mae": None,
+                    "correlation": None,
+                    "valid_pixel_count": None,
+                    "reference_source": None,
+                },
+            }
+
+        validation_path = job_dir / "validation.json"
+        validation_path.write_text(json.dumps(validation_payload, indent=2), encoding="utf-8")
+        job.outputs["validation_json"] = _output_url(job_id, validation_path.name)
+        store.update(job)
+
         # --- MESH: real terrain mesh from the DSM + the user's own uploaded image ---
         job.stage = JobStage.MESH
         store.update(job)
-        rgb_image = read_rgb_array(source_path)
         mesh_result = generate_terrain_mesh(
             dsm_height=dsm_height,
             rgb_image=rgb_image,
@@ -193,6 +342,9 @@ def execute_pipeline(job_id: str, store: JobStore, settings: Settings) -> None:
             "mesh_horizontal_spacing_z": mesh_result.horizontal_spacing_z,
             "mesh_spacing_units": mesh_result.spacing_units,
             "mesh_vertical_exaggeration": mesh_result.vertical_exaggeration,
+            "buildings_count": buildings_payload["count"],
+            "disaster_zones_count": zones_payload["count"],
+            "validation_status": validation_payload["result"]["status"],
             "started_at": started_at,
             "completed_at": time.time(),
         }

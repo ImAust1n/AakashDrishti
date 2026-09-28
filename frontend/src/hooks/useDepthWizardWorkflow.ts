@@ -36,7 +36,7 @@ function readImageDimensions(file: File): Promise<{ width: number | null; height
  * hasn't produced (currently: mesh) stays `available: false` rather than
  * being guessed at.
  */
-async function buildResultFromOutputs(
+export async function buildResultFromOutputs(
   jobId: string,
   outputs: Record<string, string>,
   originalImageUrl: string,

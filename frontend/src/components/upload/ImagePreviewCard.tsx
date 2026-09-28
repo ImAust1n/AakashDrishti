@@ -24,10 +24,10 @@ export function ImagePreviewCard({
   const isTiff = uploadedFile.extension === "tif" || uploadedFile.extension === "tiff";
 
   return (
-    <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-      <div className="relative flex h-72 items-center justify-center bg-slate-100">
+    <div className="glass-panel overflow-hidden rounded-2xl">
+      <div className="relative flex h-72 items-center justify-center bg-black/30">
         {isTiff && uploadedFile.width === null ? (
-          <div className="flex flex-col items-center gap-2 px-6 text-center text-slate-500">
+          <div className="flex flex-col items-center gap-2 px-6 text-center text-muted-foreground">
             <svg viewBox="0 0 24 24" fill="none" className="h-10 w-10" stroke="currentColor" strokeWidth={1.5}>
               <rect x="3" y="3" width="18" height="18" rx="2" />
               <path d="M3 15l4-4 5 5 3-3 6 6" strokeLinecap="round" strokeLinejoin="round" />
@@ -47,11 +47,11 @@ export function ImagePreviewCard({
         )}
       </div>
 
-      <div className="space-y-3 px-5 py-4">
+      <div className="space-y-3 border-t border-border px-5 py-4">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <p className="truncate text-sm font-medium text-slate-900">{uploadedFile.name}</p>
-            <p className="mt-0.5 text-xs text-slate-500">
+            <p className="truncate text-sm font-medium text-foreground">{uploadedFile.name}</p>
+            <p className="mt-0.5 text-xs text-muted-foreground">
               {formatBytes(uploadedFile.sizeBytes)}
               {uploadedFile.width && uploadedFile.height ? ` · ${uploadedFile.width}×${uploadedFile.height}px` : ""}
               {" · "}
@@ -61,7 +61,7 @@ export function ImagePreviewCard({
           <button
             type="button"
             onClick={onChangeImage}
-            className="shrink-0 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:border-slate-400 hover:text-slate-900"
+            className="shrink-0 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground hover:border-primary/40 hover:text-foreground"
           >
             Change Image
           </button>
@@ -73,7 +73,7 @@ export function ImagePreviewCard({
           type="button"
           onClick={onProcess}
           disabled={processDisabled}
-          className="w-full rounded-lg bg-cyan-600 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-cyan-500 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
+          className="w-full rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground"
         >
           {processLabel}
         </button>

@@ -24,10 +24,10 @@ model/**/checkpoints/
 *.tiff
 !model/ml-depth-pro-main/data/*.jpg
 
-# Reference DEM / SRTM data
-data/reference/
-data/uploads/
-data/outputs/
+# Runtime data directories
+/data/
+/context/
+/test-data/
 
 # Env
 .env
@@ -40,3 +40,8 @@ Thumbs.db
 # Editor
 .vscode/*
 !.vscode/extensions.json
+
+# Internal / Claude context files
+CLAUDE.md
+IMPLEMENTATION.md
+.claude/

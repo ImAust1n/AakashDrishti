@@ -9,8 +9,8 @@ interface GeoStatusBadgeProps {
 export function GeoStatusBadge({ uploadResult, isChecking }: GeoStatusBadgeProps) {
   if (isChecking) {
     return (
-      <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
-        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-slate-400" />
+      <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/50 px-3 py-1 text-xs font-medium text-muted-foreground">
+        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-muted-foreground" />
         Checking geospatial metadata...
       </span>
     );
@@ -22,16 +22,16 @@ export function GeoStatusBadge({ uploadResult, isChecking }: GeoStatusBadgeProps
 
   if (uploadResult.isGeoreferenced) {
     return (
-      <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700">
-        <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+      <span className="inline-flex items-center gap-1.5 rounded-full border border-secondary/30 bg-secondary/10 px-3 py-1 text-xs font-medium text-secondary">
+        <span className="h-1.5 w-1.5 rounded-full bg-secondary" />
         GeoTIFF detected &middot; {uploadResult.geo?.crs ?? "CRS unknown"}
       </span>
     );
   }
 
   return (
-    <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 px-3 py-1 text-xs font-medium text-amber-700">
-      <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+    <span className="inline-flex items-center gap-1.5 rounded-full border border-muted-foreground/30 bg-muted-foreground/10 px-3 py-1 text-xs font-medium text-muted-foreground">
+      <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground" />
       Non-georeferenced image &middot; relative depth only
     </span>
   );
