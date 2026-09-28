@@ -36,8 +36,9 @@ DEFAULT_LANDING_MIN_AREA_PX = 400
 DEFAULT_LANDING_MAX_SLOPE_DEG = 5.0
 DEFAULT_LANDING_MAX_ZONES = 10
 
-DEFAULT_FLOOD_WINDOW_PX = 25
-DEFAULT_FLOOD_MIN_AREA_PX = 100
+DEFAULT_FLOOD_WINDOW_PX = 61
+DEFAULT_FLOOD_MIN_AREA_PX = 300
+DEFAULT_FLOOD_ROUGHNESS_MULT = 1.5
 
 DEFAULT_FIRE_HEIGHT_THRESHOLD_M = 30.0
 DEFAULT_FIRE_DENSITY_RADIUS_PX = 150
@@ -284,6 +285,7 @@ def find_flood_risk_zones(
     dsm_is_metric: bool = False,
     depth_threshold: float = 1.0,
     min_area_px: int = DEFAULT_FLOOD_MIN_AREA_PX,
+    roughness_mult: float = DEFAULT_FLOOD_ROUGHNESS_MULT,
 ) -> list[dict]:
     """Heuristic decision support ONLY. Flags local depressions -- cells
     meaningfully below their local neighborhood mean -- as candidate flood
@@ -294,7 +296,19 @@ def find_flood_risk_zones(
     candidates and the neighborhood-mean baseline: a real building's height
     spike would otherwise drag the local mean up and flag the flat ground
     around it as a "depression" -- an artifact of the DSM now carrying real
-    building relief, not an actual low spot."""
+    building relief, not an actual low spot.
+
+    On dense scenes the classical-CV building segmentation (app/buildings/segment.py)
+    only finds a fraction of real footprints (e.g. attached rowhouses), so most rooftops
+    still count as "ground" here -- their ordinary roof-to-roof height variation would
+    otherwise get flagged as thousands of tiny "depressions" tracing every rooftop edge.
+    Two guards against that, on top of the building-mask exclusion: a wide averaging
+    window (`window_px`, urban-block scale rather than single-building scale) so
+    building-scale bumps wash out of the local mean, and a local-roughness-adaptive
+    threshold (`deficit > max(depth_threshold, roughness_mult * local_std)`) so a patch
+    of terrain needs a genuinely anomalous dip relative to its own neighborhood's normal
+    variability, not just any dip past a flat absolute cutoff -- a flat field and a jumbled
+    rooftop-line get different effective thresholds automatically."""
     finite = np.isfinite(dsm_height)
     if building_mask is not None:
         finite = finite & ~building_mask
@@ -302,13 +316,18 @@ def find_flood_risk_zones(
         return []
 
     filled = np.where(finite, dsm_height, 0.0).astype(np.float32)
+    finite_f = finite.astype(np.float32)
     sum_vals = ndimage.uniform_filter(filled, size=window_px, mode="nearest")
-    count_vals = ndimage.uniform_filter(finite.astype(np.float32), size=window_px, mode="nearest")
+    sumsq_vals = ndimage.uniform_filter(filled * filled, size=window_px, mode="nearest")
+    count_vals = ndimage.uniform_filter(finite_f, size=window_px, mode="nearest")
     with np.errstate(invalid="ignore", divide="ignore"):
         local_mean = sum_vals / np.maximum(count_vals, 1e-6)
+        local_var = sumsq_vals / np.maximum(count_vals, 1e-6) - local_mean**2
+    local_std = np.sqrt(np.clip(local_var, 0.0, None))
 
     deficit = local_mean - dsm_height
-    depression = finite & (deficit > depth_threshold)
+    effective_threshold = np.maximum(depth_threshold, roughness_mult * local_std)
+    depression = finite & (deficit > effective_threshold)
     if not depression.any():
         return []
 
