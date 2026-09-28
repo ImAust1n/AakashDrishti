@@ -39,6 +39,16 @@ class Settings(BaseSettings):
     # Depth Pro
     depth_pro_checkpoint: str = "./model/ml-depth-pro-main/checkpoints/depth_pro.pt"
     depth_pro_precision: str = "float16"
+    # Depth Pro is reference-only (it does not feed the height field); disable to save ~60% runtime.
+    enable_depth_pro: bool = True
+
+    # Model-output -> approximate metres. Empirical median slope of true AGL vs the fine-tuned DA V2
+    # output over 6 held-out GAMUS test tiles (range 1.8-3.1, one tall-building outlier at 8.4).
+    da_v2_height_scale: float = 2.6
+
+    # Horizontal metres-per-pixel assumed for non-georeferenced images in the Unity export
+    # (an assumption, reported as "assumed_gsd" in unity_scene.json -- not measured).
+    assumed_gsd_m: float = 0.5
 
     # Device
     device: str = "cuda"

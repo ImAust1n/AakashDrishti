@@ -35,7 +35,8 @@ def run_depth_anything_v2(
     encoder: str = "vitb",
     device_preference: str = "cuda",
     input_size: int = 518,
-) -> np.ndarray:
+    flip_tta: bool = False,
+) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
     """Run Depth Anything V2 inference on a single BGR image array.
 
     Args:
@@ -45,8 +46,13 @@ def run_depth_anything_v2(
         device_preference: "cuda" or "cpu".
         input_size: network input resolution (multiple of 14).
 
+        flip_tta: also run on the horizontally flipped image.
+
     Returns:
-        HxW float32 array of relative inverse depth (no fixed units; larger = closer).
+        HxW float32 array of the raw model output. For stock weights this is relative
+        inverse depth (larger = closer); for the GAMUS fine-tuned checkpoint it is a
+        height-above-ground-like field (larger = taller, ground ~0).
+        With `flip_tta=True`, returns `(mean_output, abs_flip_disagreement)`.
     """
     if not checkpoint_path.exists():
         raise DepthAnythingV2Unavailable(
@@ -75,6 +81,15 @@ def run_depth_anything_v2(
 
         with torch.inference_mode():
             depth = model.infer_image(image_bgr, input_size=input_size)
+            if flip_tta:
+                # Horizontal-flip test-time augmentation: the mean is a slightly better
+                # estimate, and |orig - flipped| is a real per-pixel uncertainty signal
+                # (used as the confidence map -- see app/fusion/edge_aware.py).
+                flipped = model.infer_image(np.ascontiguousarray(image_bgr[:, ::-1]), input_size=input_size)
+                flipped = flipped[:, ::-1]
+                disagreement = np.abs(depth - flipped).astype(np.float32)
+                depth = 0.5 * (depth + flipped)
 
         del model
-    return depth.astype(np.float32)
+    depth = depth.astype(np.float32)
+    return (depth, disagreement) if flip_tta else depth

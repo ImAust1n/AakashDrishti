@@ -279,6 +279,7 @@ def find_emergency_landing_zones(
 def find_flood_risk_zones(
     dsm_height: np.ndarray,
     geo: Optional[GeoMetadata] = None,
+    building_mask: Optional[np.ndarray] = None,
     window_px: int = DEFAULT_FLOOD_WINDOW_PX,
     dsm_is_metric: bool = False,
     depth_threshold: float = 1.0,
@@ -287,8 +288,16 @@ def find_flood_risk_zones(
     """Heuristic decision support ONLY. Flags local depressions -- cells
     meaningfully below their local neighborhood mean -- as candidate flood
     accumulation risk zones. `depth_threshold` is in meters if
-    `dsm_is_metric`, else in the DSM's relative units (flagged in output)."""
+    `dsm_is_metric`, else in the DSM's relative units (flagged in output).
+
+    `building_mask`, when given, is excluded from both the depression
+    candidates and the neighborhood-mean baseline: a real building's height
+    spike would otherwise drag the local mean up and flag the flat ground
+    around it as a "depression" -- an artifact of the DSM now carrying real
+    building relief, not an actual low spot."""
     finite = np.isfinite(dsm_height)
+    if building_mask is not None:
+        finite = finite & ~building_mask
     if finite.sum() < min_area_px:
         return []
 

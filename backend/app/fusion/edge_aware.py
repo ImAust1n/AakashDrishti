@@ -1,4 +1,8 @@
-"""Edge-aware fusion of Depth Anything V2 (relative) and Depth Pro (metric).
+"""Height-field construction (`build_height_field`, used by the pipeline) and the legacy
+Depth Anything V2 + Depth Pro edge-aware fusion (`fuse_depth_maps`, no longer called by the
+pipeline: it assumed DA V2 was inverse depth, which is wrong for the fine-tuned model).
+
+Legacy fusion description:
 
 PRD.md Section 8 / IMPLEMENTATION.md Section 5: do not simply average the two
 raw fields -- they are in incompatible units/scales and must be aligned
@@ -96,6 +100,50 @@ def _normalize01(arr: np.ndarray) -> np.ndarray:
     if hi <= lo:
         return np.zeros_like(arr)
     return np.clip((arr - lo) / (hi - lo), 0, 1)
+
+
+@dataclass
+class HeightFieldResult:
+    height: np.ndarray  # HxW float32, ground = 0, larger = taller (approx. metres after scaling)
+    confidence: np.ndarray  # HxW float32, [0, 1]
+    ground_level: float  # raw model value treated as ground
+
+
+def build_height_field(
+    da_v2_output: np.ndarray,
+    flip_disagreement: np.ndarray,
+    height_scale: float = 1.0,
+    ground_percentile: float = 2.0,
+) -> HeightFieldResult:
+    """Height field from the GAMUS-fine-tuned DA V2 output (the pipeline's height source).
+
+    The fine-tuned model regresses height-above-ground directly (larger = taller), so no
+    inversion or Depth Pro alignment is involved -- on nadir imagery Depth Pro is
+    anti-correlated with height and adding it made the DSM worse (see README, Validation).
+
+    - Ground level = low percentile of the output, subtracted so ground sits at 0.
+    - `height_scale` maps model units to approximate metres (empirical: the model output
+      is compressed ~2.6x relative to true AGL on held-out GAMUS tiles; it is NOT a
+      calibrated per-image metric scale).
+    - Confidence = 1 - flip disagreement normalised by its 99th percentile.
+    """
+    da = da_v2_output.astype(np.float32)
+    finite = np.isfinite(da)
+    if not finite.any():
+        raise ValueError("Depth Anything V2 output has no finite pixels")
+
+    ground = float(np.percentile(da[finite], ground_percentile))
+    height = np.where(finite, np.clip(da - ground, 0.0, None) * height_scale, np.nan)
+
+    d = np.where(np.isfinite(flip_disagreement), flip_disagreement, 0.0)
+    ref = float(np.percentile(d, 99)) or 1.0
+    confidence = 1.0 - np.clip(d / max(ref, _EPS), 0.0, 1.0)
+
+    return HeightFieldResult(
+        height=height.astype(np.float32),
+        confidence=confidence.astype(np.float32),
+        ground_level=ground,
+    )
 
 
 def fuse_depth_maps(da_v2_relative: np.ndarray, depth_pro_metric: np.ndarray) -> FusionResult:

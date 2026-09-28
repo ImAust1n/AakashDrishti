@@ -8,7 +8,7 @@ import { ResultPanel } from "@/components/results/ResultPanel";
 import { OriginalImagePreview } from "@/components/results/OriginalImagePreview";
 import { ValidationPanel, type FetchState } from "@/components/results/ValidationPanel";
 import { BuildingHeightsPanel } from "@/components/results/BuildingHeightsPanel";
-import { TerrainViewer } from "@/components/viewer/TerrainViewer";
+import { ViewerSwitcher } from "@/components/viewer/ViewerSwitcher";
 import { JobStatusBadge, GeoreferencedBadge } from "@/components/history/JobStatusBadge";
 import { getJobStatus, getBuildings, getValidation, getResultMetadata, outputUrl } from "@/lib/api/pipeline";
 import { buildResultFromOutputs } from "@/hooks/useDepthWizardWorkflow";
@@ -242,7 +242,7 @@ export function JobDetailClient({ jobId }: { jobId: string }) {
             </ResultPanel>
           </div>
 
-          <TerrainViewer
+          <ViewerSwitcher
             terrain={state.result.terrain}
             jobId={jobId}
             confidencePreviewUrl={state.result.confidence.previewUrl}

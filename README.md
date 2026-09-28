@@ -235,6 +235,17 @@ AakashDrishti/
 
 ---
 
+## Height Field & Unity Export
+
+- The **height field comes from the GAMUS fine-tuned Depth Anything V2** (flip-TTA mean, ground = 2nd percentile,
+  scaled by `DA_V2_HEIGHT_SCALE` ≈ 2.6 to approximate metres). Depth Pro is kept as a reference output only
+  (`ENABLE_DEPTH_PRO=false` skips it): on nadir imagery it is anti-correlated with height and made the DSM worse.
+  Confidence = agreement between the original and horizontally-flipped inference.
+- On 6 held-out GAMUS tiles the DSM has Spearman ρ 0.79–0.88 vs. true AGL height (aligned RMSE 1.1–3.0 m on typical tiles;
+  a 196 m tall-building tile is much worse). The metre scale is empirical, so non-georeferenced output stays `is_metric: false`.
+- Each job also writes a Unity bundle (`unity_scene.json`, `heightmap.r16`, `texture.jpg`) next to the other outputs,
+  served at `/api/pipeline/output/{job_id}/{filename}`. Schema: `backend/app/export/unity.py`.
+
 ## Notes
 
 - Models are loaded and unloaded **sequentially** to stay within 8 GB VRAM

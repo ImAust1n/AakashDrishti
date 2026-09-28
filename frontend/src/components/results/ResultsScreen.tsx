@@ -10,7 +10,7 @@ import { OriginalImagePreview } from "./OriginalImagePreview";
 import { ResultPanel } from "./ResultPanel";
 import { ValidationPanel, type FetchState } from "./ValidationPanel";
 import { BuildingHeightsPanel } from "./BuildingHeightsPanel";
-import { TerrainViewer } from "@/components/viewer/TerrainViewer";
+import { ViewerSwitcher } from "@/components/viewer/ViewerSwitcher";
 
 interface ResultsScreenProps {
   result: ProcessingResult;
@@ -116,7 +116,7 @@ export function ResultsScreen({ result, uploadResult, onStartOver }: ResultsScre
         </ResultPanel>
       </div>
 
-      <TerrainViewer
+      <ViewerSwitcher
         terrain={result.terrain}
         jobId={result.jobId}
         confidencePreviewUrl={result.confidence.previewUrl}

@@ -37,8 +37,9 @@ from app.core.config import Settings
 from app.core.logging import get_logger
 from app.depth.pipeline import run_dual_depth
 from app.depth.visualize import save_depth_preview
-from app.dsm.generate import depth_to_relative_height, write_height_geotiff
-from app.fusion.edge_aware import fuse_depth_maps
+from app.dsm.generate import write_height_geotiff
+from app.export.unity import export_unity_bundle
+from app.fusion.edge_aware import build_height_field
 from app.geospatial.raster_io import write_float32_geotiff
 from app.input.detect import UnsupportedInputError, detect_input, read_rgb_array
 from app.jobs.models import JobStage, JobState
@@ -87,26 +88,31 @@ def execute_pipeline(job_id: str, store: JobStore, settings: Settings) -> None:
             depth_pro_checkpoint=settings.depth_pro_checkpoint_path,
             depth_pro_precision=settings.depth_pro_precision,
             device_preference=settings.device,
+            enable_depth_pro=settings.enable_depth_pro,
         )
 
         da_v2_path = job_dir / "depth_anything_v2.tif"
-        depth_pro_path = job_dir / "depth_pro.tif"
-        write_float32_geotiff(dual.da_v2_relative_depth, da_v2_path, descriptor.geo)
-        write_float32_geotiff(dual.depth_pro_metric_depth, depth_pro_path, descriptor.geo)
+        write_float32_geotiff(dual.da_v2_output, da_v2_path, descriptor.geo)
         job.outputs["depth_anything_v2_tif"] = _output_url(job_id, da_v2_path.name)
-        job.outputs["depth_pro_tif"] = _output_url(job_id, depth_pro_path.name)
+        if dual.depth_pro_metric_depth is not None:
+            depth_pro_path = job_dir / "depth_pro.tif"
+            write_float32_geotiff(dual.depth_pro_metric_depth, depth_pro_path, descriptor.geo)
+            job.outputs["depth_pro_tif"] = _output_url(job_id, depth_pro_path.name)
         store.update(job)
 
-        # --- FUSION + CONFIDENCE ---
+        # --- HEIGHT FIELD + CONFIDENCE (fine-tuned DA V2 is the height source; see app/fusion/edge_aware.py) ---
+        # NOTE: the output key/file "fused_depth" is kept for API compatibility; it now holds the height field.
         job.stage = JobStage.FUSION
         store.update(job)
-        fusion_result = fuse_depth_maps(dual.da_v2_relative_depth, dual.depth_pro_metric_depth)
+        fusion_result = build_height_field(
+            dual.da_v2_output, dual.da_v2_flip_disagreement, height_scale=settings.da_v2_height_scale
+        )
 
         fused_path = job_dir / "fused_depth.tif"
         confidence_path = job_dir / "confidence.tif"
-        write_float32_geotiff(fusion_result.fused_depth, fused_path, descriptor.geo)
+        write_float32_geotiff(fusion_result.height, fused_path, descriptor.geo)
         write_float32_geotiff(fusion_result.confidence, confidence_path, descriptor.geo)
-        save_depth_preview(fusion_result.fused_depth, job_dir / "fused_depth_preview.png")
+        save_depth_preview(fusion_result.height, job_dir / "fused_depth_preview.png", cmap_name="terrain")
         save_depth_preview(fusion_result.confidence, job_dir / "confidence_preview.png", cmap_name="viridis")
         job.outputs.update(
             {
@@ -121,7 +127,7 @@ def execute_pipeline(job_id: str, store: JobStore, settings: Settings) -> None:
         # --- CALIBRATION (georeferenced input only) ---
         job.stage = JobStage.CALIBRATION
         store.update(job)
-        relative_height = depth_to_relative_height(fusion_result.fused_depth)
+        relative_height = fusion_result.height
         dsm_height = relative_height
         dsm_is_metric = False
         if descriptor.is_georeferenced and descriptor.geo is not None:
@@ -220,7 +226,9 @@ def execute_pipeline(job_id: str, store: JobStore, settings: Settings) -> None:
         try:
             zone_features = []
             zone_features += find_emergency_landing_zones(dsm_height, building_mask, geo=descriptor.geo)
-            zone_features += find_flood_risk_zones(dsm_height, geo=descriptor.geo, dsm_is_metric=dsm_is_metric)
+            zone_features += find_flood_risk_zones(
+                dsm_height, geo=descriptor.geo, building_mask=building_mask, dsm_is_metric=dsm_is_metric
+            )
             zone_features += find_highrise_fire_access_risk(building_heights, geo=descriptor.geo)
 
             zones_out = [
@@ -241,6 +249,7 @@ def execute_pipeline(job_id: str, store: JobStore, settings: Settings) -> None:
             }
         except Exception as exc:  # noqa: BLE001 -- disaster-zone analysis is best-effort, must never fail the job
             logger.exception("Disaster-zone analysis failed for job %s", job_id)
+            zones_out = []
             zones_payload = {
                 "job_id": job_id,
                 "count": 0,
@@ -302,6 +311,26 @@ def execute_pipeline(job_id: str, store: JobStore, settings: Settings) -> None:
         job.outputs["terrain_glb"] = _output_url(job_id, glb_path.name)
         store.update(job)
 
+        # --- UNITY BUNDLE: heightmap.r16 + texture.jpg + unity_scene.json for the Unity WebGL viewer ---
+        unity_scene = export_unity_bundle(
+            out_dir=job_dir,
+            job_id=job_id,
+            dsm_height=dsm_height,
+            rgb_image=rgb_image,
+            geo=descriptor.geo,
+            dsm_is_metric=dsm_is_metric,
+            buildings=buildings_payload["buildings"],
+            zones=zones_out,
+            assumed_gsd_m=settings.assumed_gsd_m,
+        )
+        for key, filename in (
+            ("unity_scene_json", "unity_scene.json"),
+            ("unity_heightmap_r16", "heightmap.r16"),
+            ("unity_texture_jpg", "texture.jpg"),
+        ):
+            job.outputs[key] = _output_url(job_id, filename)
+        store.update(job)
+
         # --- metadata.json: real, inspectable record of what actually ran ---
         metadata = {
             "job_id": job_id,
@@ -311,15 +340,21 @@ def execute_pipeline(job_id: str, store: JobStore, settings: Settings) -> None:
             "width": descriptor.width,
             "height": descriptor.height,
             "da_v2_encoder": settings.depth_anything_v2_encoder,
-            "da_v2_stats": _depth_stats(dual.da_v2_relative_depth),
-            "depth_pro_stats": _depth_stats(dual.depth_pro_metric_depth),
-            "depth_pro_focallength_px": dual.depth_pro_focallength_px,
-            "fusion_method": (
-                "Scale-aligned (robust least-squares) + guided-filter edge-aware blend; "
-                "see app/fusion/edge_aware.py"
+            "da_v2_stats": _depth_stats(dual.da_v2_output),
+            "depth_pro_stats": _depth_stats(
+                dual.depth_pro_metric_depth if dual.depth_pro_metric_depth is not None else np.zeros(1)
             ),
-            "fusion_scale_a": fusion_result.scale_a,
-            "fusion_scale_b": fusion_result.scale_b,
+            "depth_pro_focallength_px": dual.depth_pro_focallength_px or 0.0,
+            "depth_pro_enabled": dual.depth_pro_metric_depth is not None,
+            "fusion_method": (
+                "Height field from the GAMUS fine-tuned DA V2 (flip-TTA mean, ground = 2nd percentile, "
+                "empirical metre scale); confidence from flip disagreement; Depth Pro is reference-only. "
+                "See app/fusion/edge_aware.py::build_height_field"
+            ),
+            "height_ground_level_raw": fusion_result.ground_level,
+            "height_scale_applied": settings.da_v2_height_scale,
+            "unity_horizontal_scale_source": unity_scene["horizontal_scale_source"],
+            "unity_world_size_m": unity_scene["world_size_m"],
             "confidence_available": True,
             "calibration_status": calibration.status if calibration else "not_applicable",
             "calibration_note": (
